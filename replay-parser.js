@@ -121,8 +121,9 @@ async function parseReplay(url) {
 
         await enableSound(page);
 
-        console.log('\nОжидание 15 секунд...');
-        await delay(15000);
+        console.log('\nНажми Ctrl+C для завершения...');
+        // Ждём бесконечно пока пользователь не прервёт
+        await new Promise(() => { });
 
     } catch (error) {
         console.error('Ошибка:', error.message);
