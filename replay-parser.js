@@ -18,12 +18,17 @@ async function realisticClick(page, x, y, description) {
     if (description) {
         console.log(`${description}: X=${x.toFixed(0)}, Y=${y.toFixed(0)}`);
     }
-    await page.mouse.move(x, y, { steps: 10 });
-    await delay(100);
+    // Более плавное движение мыши
+    await page.mouse.move(x, y, { steps: 25 });
+    await delay(200);
+
+    // Долгое нажатие
     await page.mouse.down();
-    await delay(100);
+    await delay(300);
     await page.mouse.up();
-    await delay(100);
+
+    // Пауза после клика
+    await delay(500);
 }
 
 function delay(ms) {
