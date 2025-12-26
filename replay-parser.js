@@ -2,6 +2,12 @@ const { launch, getStream } = require('puppeteer-stream');
 const { execSync } = require('child_process');
 const fs = require('fs');
 
+// Viewport настройки (как в replay_cleaner_synced.js)
+const VIEWPORT_WIDTH = 390;
+const VIEWPORT_HEIGHT = 844;
+const DEVICE_SCALE_FACTOR = 3;
+const USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
 const MAX_RECORD_DURATION = 300_000; // 5 минут максимум (deprecated - used by waitForDemoEnd)
 const FIXED_RECORD_DURATION = 60_000; // 1 минута фиксированная запись
 
@@ -19,8 +25,8 @@ async function realisticClick(page, x, y, description) {
         console.log(`${description}: X=${x.toFixed(0)}, Y=${y.toFixed(0)}`);
     }
 
-    // Визуализация кликов отключена
-    // await showClickHitbox(page, x, y, description || 'Click');
+    // Визуализация кликов
+    await showClickHitbox(page, x, y, description || 'Click');
 
     await page.mouse.move(x, y, { steps: 5 }); // Быстрое перемещение
     await page.mouse.down();
@@ -214,40 +220,25 @@ async function enableSound(page) {
     const centerY = canvasBox.y + canvasBox.height * 0.5;
     await realisticClick(page, centerX, centerY, 'Закрываем заставку (50%, 50%)');
 
-    // ========== АДАПТИВНЫЕ КЛИКИ ПО НИЖНЕЙ ПАНЕЛИ ==========
-    // Все позиции заданы в процентах от размера canvas
-    // Y позиция нижней панели: ~92.4% от высоты (665/720 ≈ 0.924)
+    // ========== СЕТКА ПИКСЕЛЕЙ ДЛЯ ПОИСКА ЗВУКА ==========
+    // Viewport: 390x844, сканируем всю нижнюю часть экрана
 
-    const BOTTOM_PANEL_Y_PERCENT = 0.924; // 92.4% от высоты canvas
+    // Генерируем сетку позиций
+    const SOUND_BUTTON_POSITIONS = [];
+    const Y_LEVELS = [700, 720, 740, 760]; // Чуть ниже
+    const X_STEP = 20; // Шаг по X
 
-    // Позиции кнопок в процентах от ширины canvas с маленьким шагом (~3-4%)
-    // Более плотное сканирование для точного попадания по кнопкам
-    const BOTTOM_PANEL_BUTTONS_PERCENT = [
-        0.05,    // 5%
-        0.08,    // 8%
-        0.11,    // 11%
-        0.14,    // 14% - зона звука
-        0.17,    // 17%
-        0.20,    // 20%
-        0.23,    // 23%
-        0.26,    // 26%
-        0.29,    // 29%
-        0.32,    // 32%
-        0.35,    // 35%
-        0.38,    // 38%
-        0.41,    // 41%
-        0.44,    // 44%
-        0.47,    // 47%
-        0.50,    // 50%
-    ];
+    for (const y of Y_LEVELS) {
+        for (let x = 20; x < VIEWPORT_WIDTH - 20; x += X_STEP) {
+            SOUND_BUTTON_POSITIONS.push({ x, y });
+        }
+    }
 
-    // Вычисляем Y координату панели в пикселях
-    const panelY = canvasBox.y + canvasBox.height * BOTTOM_PANEL_Y_PERCENT;
-
-    console.log('\n--- Адаптивное сканирование нижней панели для включения звука ---');
-    console.log(`Canvas размер: ${canvasBox.width}x${canvasBox.height}px`);
-    console.log(`Y координата панели: ${panelY.toFixed(0)}px (${(BOTTOM_PANEL_Y_PERCENT * 100).toFixed(1)}%)`);
-    console.log(`Количество точек: ${BOTTOM_PANEL_BUTTONS_PERCENT.length}, шаг: ~3%`);
+    console.log('\n--- Сетка пикселей для поиска звука ---');
+    console.log(`Viewport: ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}px`);
+    console.log(`Y уровни: ${Y_LEVELS.join(', ')}px`);
+    console.log(`Шаг по X: ${X_STEP}px`);
+    console.log(`Всего позиций: ${SOUND_BUTTON_POSITIONS.length}`);
 
     // Проверяем звук ДО начала кликов
     let state = await getSoundState(page);
@@ -258,24 +249,20 @@ async function enableSound(page) {
 
     let soundEnabled = false;
 
-    // Один проход - кликаем пока не включим звук
-    for (let i = 0; i < BOTTOM_PANEL_BUTTONS_PERCENT.length && !soundEnabled; i++) {
-        // ВАЖНО: Проверяем звук ПЕРЕД каждым кликом чтобы не выключить его обратно
+    // Кликаем по фиксированным позициям пока не включим звук
+    for (let i = 0; i < SOUND_BUTTON_POSITIONS.length && !soundEnabled; i++) {
+        // Проверяем звук ПЕРЕД каждым кликом
         state = await getSoundState(page);
         if (state.soundOn) {
             soundEnabled = true;
-            console.log(`\n✅ ЗВУК ВКЛЮЧЕН! Останавливаем сканирование.`);
+            console.log(`\n✅ ЗВУК ВКЛЮЧЕН! Останавливаем.`);
             break;
         }
 
-        const buttonXPercent = BOTTOM_PANEL_BUTTONS_PERCENT[i];
-        const buttonX = canvasBox.x + canvasBox.width * buttonXPercent;
+        const pos = SOUND_BUTTON_POSITIONS[i];
+        console.log(`Клик ${i + 1}/${SOUND_BUTTON_POSITIONS.length}: (${pos.x}, ${pos.y})`);
 
-        console.log(`Клик ${i + 1}/${BOTTOM_PANEL_BUTTONS_PERCENT.length}: X=${(buttonXPercent * 100).toFixed(0)}%`);
-
-        await realisticClick(page, buttonX, panelY, `${(buttonXPercent * 100).toFixed(0)}%`);
-
-        // Небольшая пауза для регистрации изменения звука
+        await realisticClick(page, pos.x, pos.y, `Sound ${i + 1}`);
         await delay(150);
     }
 
@@ -360,9 +347,14 @@ async function parseReplay(url) {
     const browser = await launch({
         headless: false,
         channel: 'chrome',
-        defaultViewport: null, // Использовать размер окна браузера
+        defaultViewport: {
+            width: VIEWPORT_WIDTH,
+            height: VIEWPORT_HEIGHT,
+            deviceScaleFactor: DEVICE_SCALE_FACTOR,
+            isMobile: true,
+            hasTouch: true
+        },
         args: [
-            '--start-maximized', // Максимизировать окно
             '--autoplay-policy=no-user-gesture-required',
             '--no-sandbox',
             '--hide-scrollbars',
@@ -382,6 +374,7 @@ async function parseReplay(url) {
 
     try {
         const page = await browser.newPage();
+        await page.setUserAgent(USER_AGENT);
 
         console.log(`[2/6] Переходим на ${url}...\n`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
@@ -456,8 +449,9 @@ async function parseReplay(url) {
             try {
                 // Check if webm exists and has size
                 if (fs.existsSync(tempWebm) && fs.statSync(tempWebm).size > 0) {
+                    // Масштабирование с 3x до целевого размера viewport (как в replay_cleaner_synced.js)
                     execSync(
-                        `ffmpeg -y -i ${tempWebm} -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempOutputFile}"`,
+                        `ffmpeg -y -i ${tempWebm} -vf "scale=${VIEWPORT_WIDTH}:${VIEWPORT_HEIGHT}" -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempOutputFile}"`,
                         { stdio: 'inherit' }
                     );
 
