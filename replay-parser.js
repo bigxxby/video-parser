@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const VIEWPORT = {
     width: 1280,
-    height: 720
+    height: 1200
 };
 
 const MAX_RECORD_DURATION = 300_000; // 5 минут максимум
@@ -67,7 +67,28 @@ async function enableSound(page) {
     await page.waitForSelector('canvas', { timeout: 30000 });
     console.log('Canvas найден');
 
-    await delay(3000);
+    await delay(2000);
+
+    // Программная предзагрузка звуков
+    console.log('Инициализируем звуковую систему...');
+    await page.evaluate(() => {
+        // Устанавливаем флаги
+        window.oSoundFXOn = true;
+        window.UHT_ForceClickForSounds = false;
+
+        // Инициализируем и загружаем звуки
+        if (window.SoundLoader && typeof window.SoundLoader.InitSounds === 'function') {
+            window.SoundLoader.InitSounds();
+        }
+
+        // Вызываем OnTouchStart для инициализации AudioContext
+        if (window.SoundHelper && typeof window.SoundHelper.OnTouchStart === 'function') {
+            window.SoundHelper.OnTouchStart();
+        }
+    });
+    console.log('Звуки загружены программно');
+
+    await delay(2000);
 
     const canvasBox = await getCanvasBox(page);
     console.log(`Canvas: ${canvasBox.width}x${canvasBox.height}`);
