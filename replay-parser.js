@@ -204,29 +204,69 @@ async function getSlotName(page) {
 }
 
 async function enableSound(page) {
-    await page.waitForSelector('canvas', { timeout: 30000 });
-    console.log('Canvas найден');
+    // ========== ФИКСИРОВАННАЯ ПОЗИЦИЯ ЗВУКА ==========
+    // Кликаем сразу, не дожидаясь canvas
+    const SOUND_X = 40;
+    const SOUND_Y = 720;
+    const CLICK_DELAY = 400;
+    const MAX_CLICKS = 30; // Больше попыток т.к. canvas может ещё грузиться
 
-    // Получаем реальные размеры canvas
-    const canvasBox = await getCanvasBox(page);
-    if (!canvasBox) {
-        console.log('Canvas не найден!');
-        return false;
+    console.log(`\n--- Клики в позицию звука (${SOUND_X}, ${SOUND_Y}) ---`);
+    console.log('Кликаем сразу, не дожидаясь загрузки canvas...');
+
+    // Кликаем пока звук не включится
+    for (let i = 0; i < MAX_CLICKS; i++) {
+        // Проверяем звук (может быть ошибка если страница ещё грузится)
+        try {
+            const state = await getSoundState(page);
+            if (state.soundOn) {
+                console.log(`✅ ЗВУК ВКЛЮЧЕН после ${i} кликов!`);
+                return true;
+            }
+        } catch (e) {
+            // Игнорируем ошибки - страница ещё грузится
+        }
+
+        console.log(`Клик ${i + 1}/${MAX_CLICKS}: (${SOUND_X}, ${SOUND_Y})`);
+
+        try {
+            await page.mouse.click(SOUND_X, SOUND_Y);
+        } catch (e) {
+            // Игнорируем ошибки клика
+        }
+
+        await delay(CLICK_DELAY);
     }
-    console.log(`Canvas: ${canvasBox.width}x${canvasBox.height}`);
 
-    // Закрываем заставку кликом в центр (50% x 50%)
+    // Финальная проверка
+    try {
+        const state = await getSoundState(page);
+        if (state.soundOn) {
+            console.log('✅ Звук успешно включен');
+            return true;
+        }
+    } catch (e) { }
+
+    console.log('⚠️ Звук не был включен после всех кликов');
+    return false;
+}
+
+/**
+ * @deprecated Используйте enableSound вместо этой функции.
+ * Старая логика с сеткой пикселей для поиска звука
+ */
+async function enableSoundGrid(page) {
+    await page.waitForSelector('canvas', { timeout: 30000 });
+    const canvasBox = await getCanvasBox(page);
+    if (!canvasBox) return false;
+
     const centerX = canvasBox.x + canvasBox.width * 0.5;
     const centerY = canvasBox.y + canvasBox.height * 0.5;
-    await realisticClick(page, centerX, centerY, 'Закрываем заставку (50%, 50%)');
+    await realisticClick(page, centerX, centerY, 'Закрываем заставку');
 
-    // ========== СЕТКА ПИКСЕЛЕЙ ДЛЯ ПОИСКА ЗВУКА ==========
-    // Viewport: 390x844, сканируем всю нижнюю часть экрана
-
-    // Генерируем сетку позиций
     const SOUND_BUTTON_POSITIONS = [];
-    const Y_LEVELS = [700, 720, 740, 760]; // Чуть ниже
-    const X_STEP = 20; // Шаг по X
+    const Y_LEVELS = [720, 740, 760, 780];
+    const X_STEP = 20;
 
     for (const y of Y_LEVELS) {
         for (let x = 20; x < VIEWPORT_WIDTH - 20; x += X_STEP) {
@@ -234,52 +274,19 @@ async function enableSound(page) {
         }
     }
 
-    console.log('\n--- Сетка пикселей для поиска звука ---');
-    console.log(`Viewport: ${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}px`);
-    console.log(`Y уровни: ${Y_LEVELS.join(', ')}px`);
-    console.log(`Шаг по X: ${X_STEP}px`);
-    console.log(`Всего позиций: ${SOUND_BUTTON_POSITIONS.length}`);
-
-    // Проверяем звук ДО начала кликов
     let state = await getSoundState(page);
-    if (state.soundOn) {
-        console.log('\n✅ Звук УЖЕ включен, пропускаем сканирование');
-        return true;
-    }
+    if (state.soundOn) return true;
 
-    let soundEnabled = false;
-
-    // Кликаем по фиксированным позициям пока не включим звук
-    for (let i = 0; i < SOUND_BUTTON_POSITIONS.length && !soundEnabled; i++) {
-        // Проверяем звук ПЕРЕД каждым кликом
+    for (let i = 0; i < SOUND_BUTTON_POSITIONS.length; i++) {
         state = await getSoundState(page);
-        if (state.soundOn) {
-            soundEnabled = true;
-            console.log(`\n✅ ЗВУК ВКЛЮЧЕН! Останавливаем.`);
-            break;
-        }
+        if (state.soundOn) return true;
 
         const pos = SOUND_BUTTON_POSITIONS[i];
-        console.log(`Клик ${i + 1}/${SOUND_BUTTON_POSITIONS.length}: (${pos.x}, ${pos.y})`);
-
         await realisticClick(page, pos.x, pos.y, `Sound ${i + 1}`);
         await delay(150);
     }
 
-    // Финальная проверка
-    if (!soundEnabled) {
-        state = await getSoundState(page);
-        soundEnabled = state.soundOn;
-    }
-
-    if (!soundEnabled) {
-        console.log('\n⚠️ Звук не был включен после всех кликов');
-    } else {
-        console.log('✅ Звук успешно включен');
-    }
-
-    console.log('✓ Сканирование завершено');
-    return soundEnabled;
+    return (await getSoundState(page)).soundOn;
 }
 
 /**
@@ -379,6 +386,26 @@ async function parseReplay(url) {
         console.log(`[2/6] Переходим на ${url}...\n`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
+        // ========== СРАЗУ ИНИЦИАЛИЗИРУЕМ И КЛИКАЕМ ПО ЗВУКУ ==========
+        // Инициализируем звуки программно
+        try {
+            await page.evaluate(() => {
+                window.oSoundFXOn = true;
+                window.UHT_ForceClickForSounds = false;
+                if (window.SoundLoader && typeof window.SoundLoader.InitSounds === 'function') {
+                    window.SoundLoader.InitSounds();
+                }
+                if (window.SoundHelper && typeof window.SoundHelper.OnTouchStart === 'function') {
+                    window.SoundHelper.OnTouchStart();
+                }
+            });
+        } catch (e) {
+            // Страница ещё не готова - игнорируем
+        }
+
+        console.log('[3/6] Включаем звук СРАЗУ после загрузки...');
+        await enableSound(page);
+
         // Создаём папку для записей
         const recordingsDir = './recordings';
         if (!fs.existsSync(recordingsDir)) {
@@ -389,8 +416,8 @@ async function parseReplay(url) {
         const tempName = `recording_${timestamp}`;
         const tempOutputFile = `${recordingsDir}/${tempName}.mp4`;
 
-        // ========== ЗАПИСЬ НАЧИНАЕТСЯ СРАЗУ ПОСЛЕ ЗАГРУЗКИ (МГНОВЕННО) ==========
-        console.log('[3/6] Начинаем запись СРАЗУ после загрузки страницы...');
+        // ========== ЗАПИСЬ НАЧИНАЕТСЯ ПОСЛЕ ВКЛЮЧЕНИЯ ЗВУКА ==========
+        console.log('[4/6] Начинаем запись...');
         stream = await getStream(page, {
             audio: true,
             video: true,
@@ -401,32 +428,11 @@ async function parseReplay(url) {
         stream.pipe(recordFile);
         console.log('    Запись начата');
 
-        // Теперь, когда запись идет, можно делать все остальное
-
-        // 1. Инициализируем звуки
-        console.log('[4/6] Инициализируем звуки программно...');
-        await page.evaluate(() => {
-            window.oSoundFXOn = true;
-            window.UHT_ForceClickForSounds = false;
-            if (window.SoundLoader && typeof window.SoundLoader.InitSounds === 'function') {
-                window.SoundLoader.InitSounds();
-            }
-            if (window.SoundHelper && typeof window.SoundHelper.OnTouchStart === 'function') {
-                window.SoundHelper.OnTouchStart();
-            }
-        });
-
-        // 2. Получаем название слота (параллельно с записью)
-        // Ждем немного чтобы прогрузился title
-        await delay(2000);
+        // Получаем название слота
         const slotName = await getSlotName(page);
         console.log('\n========================================');
         console.log(`🎰 СЛОТ: ${slotName}`);
         console.log('========================================\n');
-
-        // 3. Включаем звук
-        console.log('[5/6] Включаем звук...');
-        await enableSound(page);
 
         // Функция для безопасного завершения и сохранения
         async function stopAndSave() {
