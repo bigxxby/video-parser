@@ -2,7 +2,8 @@ const { launch, getStream } = require('puppeteer-stream');
 const { execSync } = require('child_process');
 const fs = require('fs');
 
-const MAX_RECORD_DURATION = 300_000; // 5 минут максимум
+const MAX_RECORD_DURATION = 300_000; // 5 минут максимум (deprecated - used by waitForDemoEnd)
+const FIXED_RECORD_DURATION = 90_000; // 1.5 минуты фиксированная запись
 
 async function getCanvasBox(page) {
     return await page.evaluate(() => {
@@ -165,75 +166,86 @@ async function enableSound(page) {
     }
     console.log(`Canvas: ${canvasBox.width}x${canvasBox.height}`);
 
-    // Закрываем заставку кликом в центр
+    // Закрываем заставку кликом в центр (50% x 50%)
     const centerX = canvasBox.x + canvasBox.width * 0.5;
     const centerY = canvasBox.y + canvasBox.height * 0.5;
-    await realisticClick(page, centerX, centerY, 'Закрываем заставку');
+    await realisticClick(page, centerX, centerY, 'Закрываем заставку (50%, 50%)');
 
-    // ========== КЛИКИ ПО НИЖНЕЙ ПАНЕЛИ ==========
-    // Фиксированные пиксельные позиции для нижней панели
-    // Предполагаемый размер canvas: 1280x720
-    // Нижняя панель находится примерно на высоте 665px (Y = canvasBox.y + 665)
-    // Размер каждой кнопки примерно 80x50 пикселей
+    // ========== АДАПТИВНЫЕ КЛИКИ ПО НИЖНЕЙ ПАНЕЛИ ==========
+    // Все позиции заданы в процентах от размера canvas
+    // Y позиция нижней панели: ~92.4% от высоты (665/720 ≈ 0.924)
 
-    const BUTTON_HEIGHT = 50; // Фиксированная высота кнопки
-    const BUTTON_WIDTH = 80;  // Фиксированная ширина кнопки
-    const BOTTOM_PANEL_Y_OFFSET = 665; // Смещение от верха canvas до центра нижней панели
+    const BOTTOM_PANEL_Y_PERCENT = 0.924; // 92.4% от высоты canvas
 
-    // Фиксированные X позиции кнопок на нижней панели (от левого края canvas)
-    // Эти значения соответствуют типичной раскладке Pragmatic Play:
-    // Меню | Турбо | Автоигра | Инфо | Звук | Баланс | Ставка | Спин
-    const BOTTOM_PANEL_BUTTONS_X = [
-        100,   // Левый край - меню/настройки
-        185,   // Звук (основная цель)
-        270,   // Турбо
-        355,   // Автоигра
-        440,   // Инфо
-        525,   // Дополнительная зона
-        610,   // Ставка -
-        695,   // Ставка
-        780,   // Ставка +
-        865,   // Баланс
-        950,   // Спин
-        1035,  // Правее спина
-        1120,  // Крайний правый
-        1180   // Самый правый край
+    // Позиции кнопок в процентах от ширины canvas с маленьким шагом (~3-4%)
+    // Более плотное сканирование для точного попадания по кнопкам
+    const BOTTOM_PANEL_BUTTONS_PERCENT = [
+        0.05,    // 5%
+        0.08,    // 8%
+        0.11,    // 11%
+        0.14,    // 14% - зона звука
+        0.17,    // 17%
+        0.20,    // 20%
+        0.23,    // 23%
+        0.26,    // 26%
+        0.29,    // 29%
+        0.32,    // 32%
+        0.35,    // 35%
+        0.38,    // 38%
+        0.41,    // 41%
+        0.44,    // 44%
+        0.47,    // 47%
+        0.50,    // 50%
     ];
 
-    const panelY = canvasBox.y + BOTTOM_PANEL_Y_OFFSET;
+    // Вычисляем Y координату панели в пикселях
+    const panelY = canvasBox.y + canvasBox.height * BOTTOM_PANEL_Y_PERCENT;
 
-    console.log('\n--- Сканирование нижней панели для включения звука ---');
-    console.log(`Размер кнопки: ${BUTTON_WIDTH}x${BUTTON_HEIGHT}px`);
-    console.log(`Y координата панели: ${panelY.toFixed(0)}px`);
+    console.log('\n--- Адаптивное сканирование нижней панели для включения звука ---');
+    console.log(`Canvas размер: ${canvasBox.width}x${canvasBox.height}px`);
+    console.log(`Y координата панели: ${panelY.toFixed(0)}px (${(BOTTOM_PANEL_Y_PERCENT * 100).toFixed(1)}%)`);
+    console.log(`Количество точек: ${BOTTOM_PANEL_BUTTONS_PERCENT.length}, шаг: ~3%`);
+
+    // Проверяем звук ДО начала кликов
+    let state = await getSoundState(page);
+    if (state.soundOn) {
+        console.log('\n✅ Звук УЖЕ включен, пропускаем сканирование');
+        return true;
+    }
 
     let soundEnabled = false;
 
-    // Два прохода по всем кнопкам
-    for (let pass = 1; pass <= 2 && !soundEnabled; pass++) {
-        console.log(`\n=== Проход ${pass}/2 ===`);
-
-        for (let i = 0; i < BOTTOM_PANEL_BUTTONS_X.length && !soundEnabled; i++) {
-            const buttonX = canvasBox.x + BOTTOM_PANEL_BUTTONS_X[i];
-
-            console.log(`\nКлик ${i + 1}/${BOTTOM_PANEL_BUTTONS_X.length}:`);
-            console.log(`  Позиция: X=${buttonX.toFixed(0)}, Y=${panelY.toFixed(0)}`);
-            console.log(`  Хитбокс: ${BUTTON_WIDTH}x${BUTTON_HEIGHT}px`);
-
-            await realisticClick(page, buttonX, panelY, `Кнопка ${i + 1}`);
-
-            // Проверяем звук после каждого клика
-            const state = await getSoundState(page);
-            console.log(`  Звук: on=${state.on.toFixed(1)}, off=${state.off.toFixed(1)}, включен=${state.soundOn}`);
-
-            if (state.soundOn) {
-                soundEnabled = true;
-                console.log(`\n✅ ЗВУК ВКЛЮЧЕН после клика ${i + 1}!`);
-            }
+    // Один проход - кликаем пока не включим звук
+    for (let i = 0; i < BOTTOM_PANEL_BUTTONS_PERCENT.length && !soundEnabled; i++) {
+        // ВАЖНО: Проверяем звук ПЕРЕД каждым кликом чтобы не выключить его обратно
+        state = await getSoundState(page);
+        if (state.soundOn) {
+            soundEnabled = true;
+            console.log(`\n✅ ЗВУК ВКЛЮЧЕН! Останавливаем сканирование.`);
+            break;
         }
+
+        const buttonXPercent = BOTTOM_PANEL_BUTTONS_PERCENT[i];
+        const buttonX = canvasBox.x + canvasBox.width * buttonXPercent;
+
+        console.log(`Клик ${i + 1}/${BOTTOM_PANEL_BUTTONS_PERCENT.length}: X=${(buttonXPercent * 100).toFixed(0)}%`);
+
+        await realisticClick(page, buttonX, panelY, `${(buttonXPercent * 100).toFixed(0)}%`);
+
+        // Небольшая пауза для регистрации изменения звука
+        await delay(150);
+    }
+
+    // Финальная проверка
+    if (!soundEnabled) {
+        state = await getSoundState(page);
+        soundEnabled = state.soundOn;
     }
 
     if (!soundEnabled) {
         console.log('\n⚠️ Звук не был включен после всех кликов');
+    } else {
+        console.log('✅ Звук успешно включен');
     }
 
     console.log('✓ Сканирование завершено');
@@ -241,10 +253,34 @@ async function enableSound(page) {
 }
 
 /**
- * Ожидает завершения демо
+ * Ожидает фиксированное время записи
+ * @param {number} durationMs - длительность записи в миллисекундах
+ */
+async function waitForFixedDuration(durationMs = FIXED_RECORD_DURATION) {
+    const seconds = durationMs / 1000;
+    console.log(`\n⏳ Запись на ${seconds} секунд (${seconds / 60} мин)...\n`);
+
+    const startTime = Date.now();
+    const checkInterval = 5000; // каждые 5 секунд логируем прогресс
+
+    while (Date.now() - startTime < durationMs) {
+        await delay(checkInterval);
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const remaining = Math.ceil((durationMs - (Date.now() - startTime)) / 1000);
+        console.log(`  [${elapsed}s / ${seconds}s] Осталось: ${remaining}s`);
+    }
+
+    console.log(`\n✅ Запись завершена (${seconds}s)`);
+    return { success: true, elapsed: seconds };
+}
+
+/**
+ * @deprecated Используйте waitForFixedDuration вместо этой функции.
+ * Ожидает завершения демо по мониторингу звука (старая логика)
  */
 async function waitForDemoEnd(page, timeoutMs = 300000) {
-    console.log('\n⏳ Ожидание завершения демо...\n');
+    console.log('\n⚠️ [DEPRECATED] waitForDemoEnd - используйте waitForFixedDuration');
+    console.log('⏳ Ожидание завершения демо...\n');
 
     const startTime = Date.now();
     let lastSoundOn = 0;
@@ -275,24 +311,15 @@ async function waitForDemoEnd(page, timeoutMs = 300000) {
     return { success: false, elapsed: timeoutMs / 1000 };
 }
 
-// Фиксированные размеры canvas
-const CANVAS_WIDTH = 1280;
-const CANVAS_HEIGHT = 720;
-
 async function parseReplay(url) {
-    console.log('[1/6] Запускаем Chrome...\n');
-    console.log(`Фиксированный размер canvas: ${CANVAS_WIDTH}x${CANVAS_HEIGHT}`);
+    console.log('[1/6] Запускаем Chrome с адаптивными размерами...\n');
 
     const browser = await launch({
         headless: false,
         channel: 'chrome',
-        defaultViewport: {
-            width: CANVAS_WIDTH,
-            height: CANVAS_HEIGHT
-        },
+        defaultViewport: null, // Использовать размер окна браузера
         args: [
-            `--window-size=${CANVAS_WIDTH},${CANVAS_HEIGHT + 150}`, // +150 для UI Chrome (табы, адресная строка)
-            '--window-position=0,0',
+            '--start-maximized', // Максимизировать окно
             '--autoplay-policy=no-user-gesture-required',
             '--no-sandbox',
             '--hide-scrollbars',
@@ -359,8 +386,8 @@ async function parseReplay(url) {
         stream.pipe(recordFile);
         console.log('    Запись начата');
 
-        console.log('[5/6] Ожидание завершения демо...');
-        await waitForDemoEnd(page, MAX_RECORD_DURATION);
+        console.log('[5/6] Ожидание фиксированной записи (1.5 мин)...');
+        await waitForFixedDuration(FIXED_RECORD_DURATION);
 
         // Останавливаем запись
         console.log('    Останавливаем запись...');
