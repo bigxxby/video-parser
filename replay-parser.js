@@ -435,64 +435,110 @@ async function parseReplay(url) {
         console.log('[5/6] Включаем звук...');
         await enableSound(page);
 
-        console.log('[6/6] Ожидание фиксированной записи (1 мин)...');
-        await waitForFixedDuration(FIXED_RECORD_DURATION);
+        // Функция для безопасного завершения и сохранения
+        async function stopAndSave() {
+            console.log('\n🛑 Завершение записи...');
 
-        // Останавливаем запись
-        console.log('    Останавливаем запись...');
-        await new Promise(resolve => {
-            recordFile.on('finish', resolve);
-            stream.end();
+            if (stream) {
+                try {
+                    // Force stream end
+                    stream.destroy();
+                    if (recordFile) recordFile.end();
+                } catch (e) {
+                    console.log('Error closing stream:', e.message);
+                }
+            }
+
+            // Wait a bit for file close
+            await delay(1000);
+
+            console.log('[7/6] Конвертация в MP4...');
+            try {
+                // Check if webm exists and has size
+                if (fs.existsSync(tempWebm) && fs.statSync(tempWebm).size > 0) {
+                    execSync(
+                        `ffmpeg -y -i ${tempWebm} -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempOutputFile}"`,
+                        { stdio: 'inherit' }
+                    );
+
+                    // Удаляем временный webm
+                    fs.unlinkSync(tempWebm);
+
+                    // Переименовываем в финальное имя
+                    const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+                    const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
+
+                    if (fs.existsSync(tempOutputFile)) {
+                        fs.renameSync(tempOutputFile, finalOutputFile);
+                        console.log(`\n✅ Видео переименовано и сохранено: ${finalOutputFile}`);
+                    }
+                } else {
+                    console.log('❌ Файл записи пуст или не существует');
+                }
+            } catch (e) {
+                console.error('Ошибка конвертации:', e.message);
+            }
+        }
+
+        // Обработка прерывания (Ctrl+C)
+        process.removeAllListeners('SIGINT');
+        process.on('SIGINT', async () => {
+            console.log('\n\n🚨 Обнаружено прерывание! Сохраняем видео перед выходом...');
+            await stopAndSave();
+
+            if (browser) {
+                await browser.close().catch(() => { });
+            }
+            process.exit(0);
         });
-        await delay(500);
-        console.log('    Запись остановлена');
 
-        console.log('[7/6] Конвертация в MP4...');
-        // Конвертируем webm в temp mp4
-        execSync(
-            `ffmpeg -y -i ${tempWebm} -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempOutputFile}"`,
-            { stdio: 'inherit' }
-        );
+        console.log('[6/6] Ожидание фиксированной записи (1 мин)...');
+        // Используем цикл с проверкой флага для прерывания
+        const durationMs = FIXED_RECORD_DURATION;
+        const startTime = Date.now();
+        const checkInterval = 1000;
 
-        // Удаляем временный webm
-        if (fs.existsSync(tempWebm)) {
-            fs.unlinkSync(tempWebm);
+        while (Date.now() - startTime < durationMs) {
+            await delay(checkInterval);
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const remaining = Math.ceil((durationMs - (Date.now() - startTime)) / 1000);
+
+            // Логируем каждые 5 сек
+            if (elapsed % 5 === 0) {
+                console.log(`  [${elapsed}s / ${durationMs / 1000}s] Осталось: ${remaining}s`);
+            }
         }
 
-        // Переименовываем в финальное имя с названием слота
-        const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
-        const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
-
-        if (fs.existsSync(tempOutputFile)) {
-            fs.renameSync(tempOutputFile, finalOutputFile);
-            console.log(`\n✅ Видео переименовано и сохранено: ${finalOutputFile}`);
-        } else {
-            console.log(`\n✅ Видео сохранено (временное имя): ${tempOutputFile}`);
-        }
+        // Нормальное завершение
+        await stopAndSave();
 
     } catch (error) {
         console.error('Ошибка:', error.message || error);
         console.error(error.stack);
 
-        // Завершаем запись при ошибке
-        if (stream) {
-            try {
-                await new Promise(resolve => {
-                    if (recordFile) recordFile.on('finish', resolve);
-                    stream.end();
-                });
-            } catch (e) { }
-        }
-
-        // Удаляем временный файл
+        // Удаляем временный файл при ошибке (если не удалось сохранить)
         if (fs.existsSync(tempWebm)) {
-            fs.unlinkSync(tempWebm);
+            // fs.unlinkSync(tempWebm); // Keep webm for debug if needed, or delete? User wants to save if interrupt.
+            // При ошибке лучше не удалять если он есть
         }
     } finally {
-        await browser.close();
+        if (browser) {
+            try {
+                const pages = await browser.pages();
+                await Promise.all(pages.map(p => p.close().catch(() => { })));
+                await browser.close().catch(() => { });
+            } catch (e) {
+                console.error('Error closing browser:', e);
+            }
+        }
         console.log('Готово!');
     }
 }
 
 const testUrl = process.argv[2] || 'https://www.ppshare.net/oAMzeL77kS';
-parseReplay(testUrl);
+parseReplay(testUrl)
+    .then(() => process.exit(0))
+    .catch(err => {
+        console.error(err);
+        process.exit(1);
+    });
