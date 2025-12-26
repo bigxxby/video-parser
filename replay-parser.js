@@ -3,7 +3,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 
 const MAX_RECORD_DURATION = 300_000; // 5 минут максимум (deprecated - used by waitForDemoEnd)
-const FIXED_RECORD_DURATION = 90_000; // 1.5 минуты фиксированная запись
+const FIXED_RECORD_DURATION = 60_000; // 1 минута фиксированная запись
 
 async function getCanvasBox(page) {
     return await page.evaluate(() => {
@@ -19,8 +19,8 @@ async function realisticClick(page, x, y, description) {
         console.log(`${description}: X=${x.toFixed(0)}, Y=${y.toFixed(0)}`);
     }
 
-    // Показываем хитбокс перед кликом
-    await showClickHitbox(page, x, y, description || 'Click');
+    // Визуализация кликов отключена
+    // await showClickHitbox(page, x, y, description || 'Click');
 
     await page.mouse.move(x, y, { steps: 5 }); // Быстрое перемещение
     await page.mouse.down();
@@ -134,19 +134,62 @@ async function getSoundState(page) {
 }
 
 /**
- * Получает название слота из страницы
+ * Получает название слота из страницы (улучшенная версия)
  */
 async function getSlotName(page) {
-    return await page.evaluate(() => {
-        // Пробуем разные способы получить название
-        const title = document.title || '';
+    // Ждём загрузки canvas (означает что игра загрузилась)
+    try {
+        await page.waitForSelector('canvas', { timeout: 10000 });
+    } catch (e) {
+        console.log('Canvas не найден для получения названия');
+    }
 
-        // Ищем в глобальных переменных
+
+
+    // Небольшая пауза для загрузки переменных игры
+    await delay(1000);
+
+    return await page.evaluate(() => {
+        // 1. Ищем в глобальных переменных Pragmatic Play
         if (window.GAME_NAME) return window.GAME_NAME;
         if (window.gameName) return window.gameName;
+        if (window.gameConfig && window.gameConfig.gameName) return window.gameConfig.gameName;
+        if (window.gameConfig && window.gameConfig.name) return window.gameConfig.name;
 
-        // Из title
-        if (title) {
+        // 2. Ищем в объекте конфигурации игры
+        if (window.PP && window.PP.gameName) return window.PP.gameName;
+        if (window.PP && window.PP.config && window.PP.config.gameName) return window.PP.config.gameName;
+
+        // 3. Ищем в переменных Pragmatic
+        if (window.pragmaticConfig && window.pragmaticConfig.gameName) return window.pragmaticConfig.gameName;
+
+        // 4. Ищем в любых объектах с game/slot в имени
+        for (const key of Object.keys(window)) {
+            try {
+                const val = window[key];
+                if (val && typeof val === 'object') {
+                    if (val.gameName && typeof val.gameName === 'string') return val.gameName;
+                    if (val.slotName && typeof val.slotName === 'string') return val.slotName;
+                    if (val.name && key.toLowerCase().includes('game') && typeof val.name === 'string') {
+                        return val.name;
+                    }
+                }
+            } catch (e) { }
+        }
+
+        // 5. Ищем в localStorage/sessionStorage
+        try {
+            const stored = sessionStorage.getItem('gameName') || localStorage.getItem('gameName');
+            if (stored) return stored;
+        } catch (e) { }
+
+        // 6. Ищем в meta-тегах
+        const metaTitle = document.querySelector('meta[property="og:title"]');
+        if (metaTitle && metaTitle.content) return metaTitle.content;
+
+        // 7. Из title если не "Pragmatic replay"
+        const title = document.title || '';
+        if (title && !title.toLowerCase().includes('pragmatic replay') && !title.toLowerCase().includes('pragmatic play')) {
             return title.replace(/[^a-zA-Z0-9\s]/g, '').trim().substring(0, 50);
         }
 
@@ -343,8 +386,32 @@ async function parseReplay(url) {
         console.log(`[2/6] Переходим на ${url}...\n`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // Инициализируем звуковую систему сразу после загрузки страницы
-        console.log('Инициализируем звуки программно...');
+        // Создаём папку для записей
+        const recordingsDir = './recordings';
+        if (!fs.existsSync(recordingsDir)) {
+            fs.mkdirSync(recordingsDir, { recursive: true });
+        }
+
+        // Временное имя файла для записи
+        const tempName = `recording_${timestamp}`;
+        const tempOutputFile = `${recordingsDir}/${tempName}.mp4`;
+
+        // ========== ЗАПИСЬ НАЧИНАЕТСЯ СРАЗУ ПОСЛЕ ЗАГРУЗКИ (МГНОВЕННО) ==========
+        console.log('[3/6] Начинаем запись СРАЗУ после загрузки страницы...');
+        stream = await getStream(page, {
+            audio: true,
+            video: true,
+            frameSize: 1000,
+            videoBitsPerSecond: 8000000
+        });
+        recordFile = fs.createWriteStream(tempWebm);
+        stream.pipe(recordFile);
+        console.log('    Запись начата');
+
+        // Теперь, когда запись идет, можно делать все остальное
+
+        // 1. Инициализируем звуки
+        console.log('[4/6] Инициализируем звуки программно...');
         await page.evaluate(() => {
             window.oSoundFXOn = true;
             window.UHT_ForceClickForSounds = false;
@@ -355,38 +422,20 @@ async function parseReplay(url) {
                 window.SoundHelper.OnTouchStart();
             }
         });
-        await delay(2000); // Ждём загрузки звуков
 
-        // Получаем название слота
+        // 2. Получаем название слота (параллельно с записью)
+        // Ждем немного чтобы прогрузился title
+        await delay(2000);
         const slotName = await getSlotName(page);
-        console.log(`Слот: ${slotName}`);
+        console.log('\n========================================');
+        console.log(`🎰 СЛОТ: ${slotName}`);
+        console.log('========================================\n');
 
-        // Создаём папку для записей
-        const recordingsDir = './recordings';
-        if (!fs.existsSync(recordingsDir)) {
-            fs.mkdirSync(recordingsDir, { recursive: true });
-        }
-
-        // Файл для выходного видео
-        const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
-        const outputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
-
-        console.log('[3/6] Включаем звук...');
+        // 3. Включаем звук
+        console.log('[5/6] Включаем звук...');
         await enableSound(page);
 
-        console.log('[4/6] Начинаем запись видео + аудио...');
-        // Начинаем запись через puppeteer-stream
-        stream = await getStream(page, {
-            audio: true,
-            video: true,
-            frameSize: 1000, // ~1 second chunks
-            videoBitsPerSecond: 8000000 // 8 Mbps для качественного видео
-        });
-        recordFile = fs.createWriteStream(tempWebm);
-        stream.pipe(recordFile);
-        console.log('    Запись начата');
-
-        console.log('[5/6] Ожидание фиксированной записи (1.5 мин)...');
+        console.log('[6/6] Ожидание фиксированной записи (1 мин)...');
         await waitForFixedDuration(FIXED_RECORD_DURATION);
 
         // Останавливаем запись
@@ -398,10 +447,10 @@ async function parseReplay(url) {
         await delay(500);
         console.log('    Запись остановлена');
 
-        console.log('[6/6] Конвертация в MP4...');
-        // Конвертируем webm в mp4 без изменения размеров
+        console.log('[7/6] Конвертация в MP4...');
+        // Конвертируем webm в temp mp4
         execSync(
-            `ffmpeg -y -i ${tempWebm} -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${outputFile}"`,
+            `ffmpeg -y -i ${tempWebm} -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempOutputFile}"`,
             { stdio: 'inherit' }
         );
 
@@ -410,7 +459,16 @@ async function parseReplay(url) {
             fs.unlinkSync(tempWebm);
         }
 
-        console.log(`\n✅ Видео сохранено: ${outputFile}`);
+        // Переименовываем в финальное имя с названием слота
+        const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+        const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
+
+        if (fs.existsSync(tempOutputFile)) {
+            fs.renameSync(tempOutputFile, finalOutputFile);
+            console.log(`\n✅ Видео переименовано и сохранено: ${finalOutputFile}`);
+        } else {
+            console.log(`\n✅ Видео сохранено (временное имя): ${tempOutputFile}`);
+        }
 
     } catch (error) {
         console.error('Ошибка:', error.message || error);
