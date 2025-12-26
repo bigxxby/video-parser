@@ -1,15 +1,13 @@
-const puppeteer = require('puppeteer');
 const { launch, getStream } = require('puppeteer-stream');
+const { execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
-const { spawn } = require('child_process');
 
 const VIEWPORT = {
     width: 1280,
     height: 720
 };
 
-const RECORDINGS_DIR = './recordings';
+const MAX_RECORD_DURATION = 300_000; // 5 минут максимум
 
 async function getCanvasBox(page) {
     return await page.evaluate(() => {
@@ -126,135 +124,106 @@ async function waitForDemoEnd(page, timeoutMs = 300000) {
     return { success: false, elapsed: timeoutMs / 1000 };
 }
 
-/**
- * Конвертирует webm в mp4 через ffmpeg
- */
-function convertToMp4(webmPath, mp4Path) {
-    return new Promise((resolve, reject) => {
-        console.log(`\n🔄 Конвертация в MP4...`);
-
-        const ffmpeg = spawn('ffmpeg', [
-            '-y',
-            '-i', webmPath,
-            '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-crf', '23',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            mp4Path
-        ]);
-
-        ffmpeg.stderr.on('data', (data) => {
-            // Показываем только прогресс
-            const str = data.toString();
-            if (str.includes('time=')) {
-                const match = str.match(/time=(\d{2}:\d{2}:\d{2})/);
-                if (match) {
-                    process.stdout.write(`\r  Прогресс: ${match[1]}`);
-                }
-            }
-        });
-
-        ffmpeg.on('close', (code) => {
-            console.log('');
-            if (code === 0) {
-                // Удаляем webm
-                fs.unlinkSync(webmPath);
-                console.log(`✓ Сохранено: ${mp4Path}`);
-                resolve(mp4Path);
-            } else {
-                reject(new Error(`ffmpeg exited with code ${code}`));
-            }
-        });
-
-        ffmpeg.on('error', (err) => {
-            reject(err);
-        });
-    });
-}
-
 async function parseReplay(url) {
-    console.log('Запускаем Chrome...\n');
+    console.log('[1/6] Запускаем Chrome...\n');
 
-    // Используем launch из puppeteer-stream
     const browser = await launch({
-        defaultViewport: VIEWPORT,
-        executablePath: puppeteer.executablePath(),
+        headless: false,
+        channel: 'chrome',
+        defaultViewport: {
+            width: VIEWPORT.width,
+            height: VIEWPORT.height,
+            deviceScaleFactor: 2
+        },
         args: [
             `--window-size=${VIEWPORT.width},${VIEWPORT.height + 100}`,
             '--autoplay-policy=no-user-gesture-required',
             '--no-sandbox',
+            '--allowlisted-extension-id=jjndjgheafjngoipoacpjgeicjeomjli'
         ],
-        ignoreDefaultArgs: ['--mute-audio'],
+        ignoreDefaultArgs: ['--mute-audio']
     });
 
     let stream = null;
-    let file = null;
+    let recordFile = null;
+    const timestamp = Date.now();
+    const tempWebm = `temp_recording_${timestamp}.webm`;
 
     try {
         const page = await browser.newPage();
         await page.setViewport(VIEWPORT);
 
-        console.log(`Переходим на ${url}...\n`);
+        console.log(`[2/6] Переходим на ${url}...\n`);
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
         // Получаем название слота
         const slotName = await getSlotName(page);
-        const safeName = slotName.replace(/[^a-zA-Z0-9_\-]/g, '_').toLowerCase();
-        const timestamp = Date.now();
+        console.log(`Слот: ${slotName}`);
 
         // Создаём папку для записей
-        const slotDir = path.join(RECORDINGS_DIR, safeName);
-        if (!fs.existsSync(slotDir)) {
-            fs.mkdirSync(slotDir, { recursive: true });
+        const recordingsDir = './recordings';
+        if (!fs.existsSync(recordingsDir)) {
+            fs.mkdirSync(recordingsDir, { recursive: true });
         }
 
-        const webmPath = path.join(slotDir, `${timestamp}.webm`);
-        const mp4Path = path.join(slotDir, `${timestamp}.mp4`);
+        // Файл для выходного видео
+        const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+        const outputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
 
-        console.log(`📁 Папка: ${slotDir}`);
-
-        // Начинаем запись
-        stream = await getStream(page, {
-            audio: true,
-            video: true,
-            frameSize: 1000,
-        });
-
-        file = fs.createWriteStream(webmPath);
-        stream.pipe(file);
-        console.log('🔴 Запись начата\n');
-
+        console.log('[3/6] Включаем звук...');
         await enableSound(page);
 
-        const result = await waitForDemoEnd(page);
+        console.log('[4/6] Начинаем запись видео + аудио...');
+        // Начинаем запись через puppeteer-stream
+        stream = await getStream(page, { audio: true, video: true });
+        recordFile = fs.createWriteStream(tempWebm);
+        stream.pipe(recordFile);
+        console.log('    Запись начата');
+
+        console.log('[5/6] Ожидание завершения демо...');
+        await waitForDemoEnd(page, MAX_RECORD_DURATION);
 
         // Останавливаем запись
-        if (stream) {
-            stream.destroy();
-        }
-        if (file) {
-            file.close();
+        console.log('    Останавливаем запись...');
+        await new Promise(resolve => {
+            recordFile.on('finish', resolve);
+            stream.end();
+        });
+        await delay(500);
+        console.log('    Запись остановлена');
+
+        console.log('[6/6] Конвертация в MP4...');
+        // Конвертируем webm в mp4
+        execSync(
+            `ffmpeg -y -i ${tempWebm} -vf "scale=${VIEWPORT.width}:${VIEWPORT.height}" -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${outputFile}"`,
+            { stdio: 'inherit' }
+        );
+
+        // Удаляем временный webm
+        if (fs.existsSync(tempWebm)) {
+            fs.unlinkSync(tempWebm);
         }
 
-        console.log('\n⏹️ Запись остановлена');
-
-        // Даём время на сохранение файла
-        await delay(2000);
-
-        // Конвертируем в mp4
-        if (fs.existsSync(webmPath)) {
-            await convertToMp4(webmPath, mp4Path);
-        }
-
-        if (result.success) {
-            console.log('\n✅ Реплей записан успешно!');
-        }
+        console.log(`\n✅ Видео сохранено: ${outputFile}`);
 
     } catch (error) {
-        console.error('Ошибка:', error.message);
-        if (stream) stream.destroy();
-        if (file) file.close();
+        console.error('Ошибка:', error.message || error);
+        console.error(error.stack);
+
+        // Завершаем запись при ошибке
+        if (stream) {
+            try {
+                await new Promise(resolve => {
+                    if (recordFile) recordFile.on('finish', resolve);
+                    stream.end();
+                });
+            } catch (e) { }
+        }
+
+        // Удаляем временный файл
+        if (fs.existsSync(tempWebm)) {
+            fs.unlinkSync(tempWebm);
+        }
     } finally {
         await browser.close();
         console.log('Готово!');
