@@ -1,4 +1,17 @@
-const { launch, getStream } = require('puppeteer-stream');
+// Определяем режим работы
+const isDockerMode = process.env.DOCKER_MODE === 'true' || process.env.HEADLESS === 'true';
+
+// Теперь и Docker и Local используют puppeteer-stream (Docker через Xvfb)
+const puppeteerStream = require('puppeteer-stream');
+const puppeteerLaunch = puppeteerStream.launch;
+const getStream = puppeteerStream.getStream;
+
+if (isDockerMode) {
+    console.log('🐳 Docker mode: puppeteer-stream + Xvfb (with audio!)');
+} else {
+    console.log('🖥️  Local mode: puppeteer-stream (with audio)');
+}
+
 const { execSync } = require('child_process');
 const fs = require('fs');
 
@@ -204,30 +217,54 @@ async function getSlotName(page) {
 }
 
 async function enableSound(page) {
-    // ========== ФИКСИРОВАННАЯ ПОЗИЦИЯ ЗВУКА ==========
-    // Кликаем сразу, не дожидаясь canvas
+    // ========== БЕСКОНЕЧНЫЕ КЛИКИ ПОКА ЗВУК НЕ ВКЛЮЧИТСЯ ==========
     const SOUND_X = 40;
     const SOUND_Y = 720;
     const CLICK_DELAY = 400;
-    const MAX_CLICKS = 30; // Больше попыток т.к. canvas может ещё грузиться
 
-    console.log(`\n--- Клики в позицию звука (${SOUND_X}, ${SOUND_Y}) ---`);
-    console.log('Кликаем сразу, не дожидаясь загрузки canvas...');
+    console.log(`\n--- Бесконечные клики в позицию звука (${SOUND_X}, ${SOUND_Y}) ---`);
+    console.log('Кликаем пока звук не включится...');
 
-    // Кликаем пока звук не включится
-    for (let i = 0; i < MAX_CLICKS; i++) {
-        // Проверяем звук (может быть ошибка если страница ещё грузится)
+    // Debug: сохраняем скриншот перед кликами (только в Docker режиме)
+    if (isDockerMode) {
+        try {
+            await page.screenshot({ path: './recordings/debug_before_clicks.png', fullPage: true });
+            console.log('📸 Debug screenshot saved: ./recordings/debug_before_clicks.png');
+        } catch (e) {
+            console.log('Failed to save debug screenshot:', e.message);
+        }
+    }
+
+    let clickCount = 0;
+
+    // Бесконечный цикл пока звук не включится
+    while (true) {
+        clickCount++;
+
+        // Проверяем звук
         try {
             const state = await getSoundState(page);
             if (state.soundOn) {
-                console.log(`✅ ЗВУК ВКЛЮЧЕН после ${i} кликов!`);
+                console.log(`\n✅ ЗВУК ВКЛЮЧЕН после ${clickCount} кликов!`);
+
+                // Сохраняем финальный скриншот при успехе
+                if (isDockerMode) {
+                    try {
+                        await page.screenshot({ path: './recordings/debug_sound_enabled.png', fullPage: true });
+                        console.log('📸 Debug screenshot saved: ./recordings/debug_sound_enabled.png');
+                    } catch (e) { }
+                }
+
                 return true;
             }
         } catch (e) {
             // Игнорируем ошибки - страница ещё грузится
         }
 
-        console.log(`Клик ${i + 1}/${MAX_CLICKS}: (${SOUND_X}, ${SOUND_Y})`);
+        // Логируем каждые 10 кликов
+        if (clickCount % 10 === 0) {
+            console.log(`Клик ${clickCount}: (${SOUND_X}, ${SOUND_Y}) - звук ещё не включен...`);
+        }
 
         try {
             await page.mouse.click(SOUND_X, SOUND_Y);
@@ -236,19 +273,15 @@ async function enableSound(page) {
         }
 
         await delay(CLICK_DELAY);
-    }
 
-    // Финальная проверка
-    try {
-        const state = await getSoundState(page);
-        if (state.soundOn) {
-            console.log('✅ Звук успешно включен');
-            return true;
+        // Debug: сохраняем скриншот каждые 30 кликов
+        if (isDockerMode && clickCount % 30 === 0) {
+            try {
+                await page.screenshot({ path: `./recordings/debug_click_${clickCount}.png`, fullPage: true });
+                console.log(`📸 Debug screenshot saved: ./recordings/debug_click_${clickCount}.png`);
+            } catch (e) { }
         }
-    } catch (e) { }
-
-    console.log('⚠️ Звук не был включен после всех кликов');
-    return false;
+    }
 }
 
 /**
@@ -349,11 +382,23 @@ async function waitForDemoEnd(page, timeoutMs = 300000) {
 }
 
 async function parseReplay(url) {
-    console.log('[1/6] Запускаем Chrome с адаптивными размерами...\n');
+    // В Docker используем headless: "new" режим
+    // Устанавливаем DOCKER_MODE=true или HEADLESS=true для активации
+    const isDockerMode = process.env.DOCKER_MODE === 'true' || process.env.HEADLESS === 'true';
+    const headlessMode = isDockerMode ? 'new' : false;
 
-    const browser = await launch({
-        headless: false,
-        channel: 'chrome',
+    // В Docker используем Chromium из PUPPETEER_EXECUTABLE_PATH
+    const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
+
+    console.log(`[1/6] Запускаем браузер (headless: ${headlessMode})...\n`);
+    if (isDockerMode) {
+        console.log('🐳 Docker режим: headless: "new" с GPU ускорением');
+        console.log(`   Executable: ${executablePath || 'default Chrome'}`);
+    }
+
+    const launchOptions = {
+        headless: headlessMode,
+        protocolTimeout: 120000, // 2 minutes timeout for Docker performance
         defaultViewport: {
             width: VIEWPORT_WIDTH,
             height: VIEWPORT_HEIGHT,
@@ -364,27 +409,67 @@ async function parseReplay(url) {
         args: [
             '--autoplay-policy=no-user-gesture-required',
             '--no-sandbox',
+            '--disable-setuid-sandbox',
             '--hide-scrollbars',
             '--disable-infobars',
             '--disable-notifications',
             '--disable-popup-blocking',
             '--disable-translate',
-            '--allowlisted-extension-id=jjndjgheafjngoipoacpjgeicjeomjli'
+            // GPU и WebGL для Docker (canvas рендеринг)
+            '--enable-webgl',
+            '--enable-gpu',
+            '--use-gl=egl',
+            '--enable-features=Vulkan,UseSkiaRenderer',
+            '--ignore-gpu-blocklist',
+            '--disable-software-rasterizer',
+            // Для стабильности в Docker
+            '--disable-dev-shm-usage',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-breakpad',
+            '--disable-component-update',
+            '--disable-default-apps',
+            '--disable-hang-monitor',
+            '--disable-ipc-flooding-protection',
+            '--disable-prompt-on-repost',
+            '--disable-renderer-backgrounding',
+            '--disable-sync',
+            '--metrics-recording-only',
+            '--no-first-run',
+            '--password-store=basic',
+            '--use-mock-keychain'
         ],
         ignoreDefaultArgs: ['--mute-audio', '--enable-automation']
-    });
+    };
+
+    // Docker с Xvfb также использует puppeteer-stream с расширением
+    if (executablePath) {
+        launchOptions.executablePath = executablePath;
+    } else {
+        launchOptions.channel = 'chrome';
+    }
+    // puppeteer-stream extension needed for both Docker and Local
+    launchOptions.args.push('--allowlisted-extension-id=jjndjgheafjngoipoacpjgeicjeomjli');
+
+    const browser = await puppeteerLaunch(launchOptions);
 
     let stream = null;
     let recordFile = null;
     const timestamp = Date.now();
-    const tempWebm = `temp_recording_${timestamp}.webm`;
+    // Создаём записи сразу в папке recordings (избегаем EXDEV в Docker)
+    const recordingsDir = './recordings';
+    const tempWebm = `${recordingsDir}/temp_recording_${timestamp}.webm`;
 
     try {
         const page = await browser.newPage();
         await page.setUserAgent(USER_AGENT);
 
-        console.log(`[2/6] Переходим на ${url}...\n`);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        console.log(`[2/6] Переходим на ${url}...\\n`);
+        // Use domcontentloaded - game pages with heavy JS may take too long for networkidle2
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+        // Give the page time to initialize JavaScript
+        await delay(5000);
 
         // ========== СРАЗУ ИНИЦИАЛИЗИРУЕМ И КЛИКАЕМ ПО ЗВУКУ ==========
         // Инициализируем звуки программно
@@ -406,18 +491,16 @@ async function parseReplay(url) {
         console.log('[3/6] Включаем звук СРАЗУ после загрузки...');
         await enableSound(page);
 
-        // Создаём папку для записей
-        const recordingsDir = './recordings';
+        // Создаём папку для записей если не существует
         if (!fs.existsSync(recordingsDir)) {
             fs.mkdirSync(recordingsDir, { recursive: true });
         }
 
-        // Временное имя файла для записи
-        const tempName = `recording_${timestamp}`;
-        const tempOutputFile = `${recordingsDir}/${tempName}.mp4`;
 
         // ========== ЗАПИСЬ НАЧИНАЕТСЯ ПОСЛЕ ВКЛЮЧЕНИЯ ЗВУКА ==========
         console.log('[4/6] Начинаем запись...');
+
+        // Используем puppeteer-stream для записи (и Docker, и Local)
         stream = await getStream(page, {
             audio: true,
             video: true,
@@ -426,7 +509,7 @@ async function parseReplay(url) {
         });
         recordFile = fs.createWriteStream(tempWebm);
         stream.pipe(recordFile);
-        console.log('    Запись начата');
+        console.log('    🎬 Recording started (with audio)');
 
         // Получаем название слота
         const slotName = await getSlotName(page);
@@ -438,45 +521,25 @@ async function parseReplay(url) {
         async function stopAndSave() {
             console.log('\n🛑 Завершение записи...');
 
-            if (stream) {
-                try {
-                    // Force stream end
-                    stream.destroy();
-                    if (recordFile) recordFile.end();
-                } catch (e) {
-                    console.log('Error closing stream:', e.message);
-                }
+            const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+
+            // Останавливаем stream
+            try {
+                stream.destroy();
+                if (recordFile) recordFile.end();
+            } catch (e) {
+                console.log('Error closing stream:', e.message);
             }
 
-            // Wait a bit for file close
             await delay(1000);
 
-            console.log('[7/6] Конвертация в MP4...');
-            try {
-                // Check if webm exists and has size
-                if (fs.existsSync(tempWebm) && fs.statSync(tempWebm).size > 0) {
-                    // Масштабирование с 3x до целевого размера viewport (как в replay_cleaner_synced.js)
-                    execSync(
-                        `ffmpeg -y -i ${tempWebm} -vf "scale=${VIEWPORT_WIDTH}:${VIEWPORT_HEIGHT}" -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "${tempOutputFile}"`,
-                        { stdio: 'inherit' }
-                    );
-
-                    // Удаляем временный webm
-                    fs.unlinkSync(tempWebm);
-
-                    // Переименовываем в финальное имя
-                    const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
-                    const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
-
-                    if (fs.existsSync(tempOutputFile)) {
-                        fs.renameSync(tempOutputFile, finalOutputFile);
-                        console.log(`\n✅ Видео переименовано и сохранено: ${finalOutputFile}`);
-                    }
-                } else {
-                    console.log('❌ Файл записи пуст или не существует');
-                }
-            } catch (e) {
-                console.error('Ошибка конвертации:', e.message);
+            // Переименовываем webm в финальное имя
+            const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.webm`;
+            if (fs.existsSync(tempWebm) && fs.statSync(tempWebm).size > 0) {
+                fs.renameSync(tempWebm, finalOutputFile);
+                console.log(`\n✅ Видео сохранено: ${finalOutputFile}`);
+            } else {
+                console.log('❌ Файл записи пуст или не существует');
             }
         }
 
