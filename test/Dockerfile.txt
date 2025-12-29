@@ -1,0 +1,54 @@
+FROM python:3.13-slim
+
+WORKDIR /code
+
+RUN apt update && apt install -y \
+    curl \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    chromium \
+    chromium-sandbox \
+    fonts-liberation \
+    fonts-noto \
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    xvfb \
+    libegl1 \
+    libgbm1 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    libnvidia-egl-wayland1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# NVIDIA Vulkan ICD - points to library injected by nvidia-container-runtime
+RUN mkdir -p /usr/share/vulkan/icd.d && \
+    echo '{"file_format_version":"1.0.1","ICD":{"library_path":"libGLX_nvidia.so.0","api_version":"1.3.0"}}' \
+    > /usr/share/vulkan/icd.d/nvidia_icd.json
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock package.json ./
+RUN uv sync --frozen --no-dev
+RUN npm install
+
+COPY services/replay-recorder/package.json services/replay-recorder/
+RUN cd services/replay-recorder && npm install
+
+COPY ./ .
+
+RUN cd services/replay-recorder && npm run build
+
+# GPU check script
+COPY scripts/check_gpu.sh /usr/local/bin/check_gpu
+RUN chmod +x /usr/local/bin/check_gpu
+
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

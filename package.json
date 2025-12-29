@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/bigxxby/video-parser#readme",
   "dependencies": {
+    "node-fetch": "^2.7.0",
     "puppeteer": "^24.34.0",
     "puppeteer-screen-recorder": "^3.0.6",
     "puppeteer-stream": "^3.0.22"

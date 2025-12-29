@@ -18,7 +18,7 @@ const fs = require('fs');
 // Viewport настройки (как в replay_cleaner_synced.js)
 const VIEWPORT_WIDTH = 390;
 const VIEWPORT_HEIGHT = 844;
-const DEVICE_SCALE_FACTOR = 2; // Reduced from 3 to 2 for better performance in Docker
+const DEVICE_SCALE_FACTOR = 3; // High quality 3x density
 const USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
 const MAX_RECORD_DURATION = 300_000; // 5 минут максимум (deprecated - used by waitForDemoEnd)
@@ -322,8 +322,8 @@ async function processReplay(url, browser) {
         stream = await getStream(page, {
             audio: true,
             video: true,
-            frameSize: 33, // 30 FPS
-            videoBitsPerSecond: 3000000,
+            frameSize: 16, // 60 FPS
+            videoBitsPerSecond: 4000000, // Reduced for less CPU load
             mimeType: 'video/webm;codecs=vp8'
         });
         recordFile = fs.createWriteStream(tempWebm);
@@ -357,8 +357,18 @@ async function processReplay(url, browser) {
 
                 console.log('🔄 Конвертация в MP4 (forced 30fps)...');
                 try {
-                    execSync(`ffmpeg -y -i "${finalOutputFile}" -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -r 30 "${finalMp4File}"`, { stdio: 'inherit' });
+                    // -crf 20 (Better quality), -b:v 6M (Target bitrate)
+                    execSync(`ffmpeg -y -i "${finalOutputFile}" -c:v libx264 -preset ultrafast -crf 20 -c:a aac -b:a 128k -r 60 "${finalMp4File}"`, { stdio: 'inherit' });
                     console.log(`✅ MP4 создан: ${finalMp4File}`);
+
+                    // Удаляем исходный webm файл чтобы не занимать место
+                    try {
+                        fs.unlinkSync(finalOutputFile);
+                        console.log(`🗑️ Удален исходный WEBM: ${finalOutputFile}`);
+                    } catch (e) {
+                        console.error('Ошибка удаления WEBM:', e.message);
+                    }
+
                 } catch (e) {
                     console.error('❌ Ошибка конвертации в MP4:', e.message);
                 }

@@ -20,7 +20,7 @@ services:
       - ./pragmatic_play_wins.json:/app/pragmatic_play_wins.json:ro
     
     # Shared memory for Chrome (важно для стабильности)
-    shm_size: '2gb'
+    shm_size: '4gb'
     
     # Security options for Chrome
     security_opt:
