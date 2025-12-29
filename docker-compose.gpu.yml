@@ -1,0 +1,29 @@
+# GPU override for Linux with NVIDIA
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+
+services:
+  video-parser:
+    runtime: nvidia
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, graphics, utility, video, compute]
+    
+    devices:
+      - /dev/dri:/dev/dri
+    
+    environment:
+      - NODE_ENV=production
+      - DOCKER_MODE=true
+      - BATCH_MODE=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      # GPU mode flag for replay-parser.js
+      - GPU_MODE=true
+      # NVIDIA GPU settings (override LIBGL_ALWAYS_SOFTWARE)
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute,video
+      - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json

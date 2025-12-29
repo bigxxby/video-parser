@@ -1,5 +1,7 @@
 // Определяем режим работы
 const isDockerMode = process.env.DOCKER_MODE === 'true' || process.env.HEADLESS === 'true';
+// GPU mode - включается автоматически при наличии NVIDIA GPU или вручную через env
+const isGpuMode = process.env.GPU_MODE === 'true' || process.env.NVIDIA_VISIBLE_DEVICES !== undefined;
 
 // Теперь и Docker и Local используют puppeteer-stream (Docker через Xvfb)
 const puppeteerStream = require('puppeteer-stream');
@@ -7,7 +9,11 @@ const puppeteerLaunch = puppeteerStream.launch;
 const getStream = puppeteerStream.getStream;
 
 if (isDockerMode) {
-    console.log('🐳 Docker mode: puppeteer-stream + Xvfb (with audio!)');
+    if (isGpuMode) {
+        console.log('🐳🎮 Docker mode: puppeteer-stream + Xvfb + NVIDIA GPU acceleration!');
+    } else {
+        console.log('🐳 Docker mode: puppeteer-stream + Xvfb (software rendering)');
+    }
 } else {
     console.log('🖥️  Local mode: puppeteer-stream (with audio)');
 }
@@ -23,6 +29,87 @@ const USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Apple
 
 const MAX_RECORD_DURATION = 300_000; // 5 минут максимум (deprecated - used by waitForDemoEnd)
 const FIXED_RECORD_DURATION = 80_000; // 1 минута 20 секунд (80 секунд)
+
+/**
+ * Возвращает аргументы Chrome в зависимости от режима GPU
+ * При наличии NVIDIA GPU используется аппаратное ускорение
+ * Без GPU используется software rendering
+ */
+function getChromeArgs() {
+    // Базовые аргументы для всех режимов
+    const baseArgs = [
+        '--autoplay-policy=no-user-gesture-required',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--hide-scrollbars',
+        '--disable-infobars',
+        '--disable-notifications',
+        '--disable-popup-blocking',
+        '--disable-translate',
+        '--disable-dev-shm-usage',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-update',
+        '--disable-default-apps',
+        '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-prompt-on-repost',
+        '--disable-renderer-backgrounding',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--password-store=basic',
+        '--use-mock-keychain'
+    ];
+
+    if (isGpuMode) {
+        // === NVIDIA GPU MODE ===
+        // Аппаратное ускорение для canvas и WebGL через Vulkan/EGL
+        console.log('🎮 GPU Mode: Hardware accelerated canvas rendering');
+        return [
+            ...baseArgs,
+            // WebGL и GPU ускорение
+            '--enable-webgl',
+            '--enable-webgl2',
+            '--enable-gpu',
+            '--enable-gpu-rasterization',
+            '--enable-accelerated-2d-canvas',
+            '--enable-accelerated-video-decode',
+            '--enable-accelerated-video-encode',
+            // Vulkan backend для максимальной производительности
+            '--use-gl=egl',
+            '--use-vulkan',
+            '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,UseSkiaRenderer,CanvasOopRasterization',
+            // Игнорировать блокировки GPU
+            '--ignore-gpu-blocklist',
+            '--ignore-gpu-blacklist',
+            // Отключить throttling для максимальной производительности
+            '--disable-frame-rate-limit',
+            '--disable-gpu-vsync',
+            // Canvas optimizations
+            '--force-gpu-rasterization',
+            '--enable-zero-copy',
+            '--enable-native-gpu-memory-buffers',
+        ];
+    } else {
+        // === SOFTWARE RENDERING MODE ===
+        // Для Mac или систем без NVIDIA GPU
+        console.log('💻 Software Mode: CPU-based rendering');
+        return [
+            ...baseArgs,
+            // Software rendering
+            '--disable-gpu',
+            '--disable-gpu-compositing',
+            '--disable-software-rasterizer',
+            // Но WebGL нужен для canvas игр
+            '--enable-webgl',
+            '--use-gl=swiftshader',
+            '--enable-features=UseSkiaRenderer',
+        ];
+    }
+}
 
 async function getCanvasBox(page) {
     return await page.evaluate(() => {
@@ -433,38 +520,7 @@ async function main() {
             isMobile: true,
             hasTouch: true
         },
-        args: [
-            '--autoplay-policy=no-user-gesture-required',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--hide-scrollbars',
-            '--disable-infobars',
-            '--disable-notifications',
-            '--disable-popup-blocking',
-            '--disable-translate',
-            '--enable-webgl',
-            '--enable-gpu',
-            '--use-gl=egl',
-            '--enable-features=Vulkan,UseSkiaRenderer',
-            '--ignore-gpu-blocklist',
-            '--disable-software-rasterizer',
-            '--disable-dev-shm-usage',
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-breakpad',
-            '--disable-component-update',
-            '--disable-default-apps',
-            '--disable-hang-monitor',
-            '--disable-ipc-flooding-protection',
-            '--disable-prompt-on-repost',
-            '--disable-renderer-backgrounding',
-            '--disable-sync',
-            '--metrics-recording-only',
-            '--no-first-run',
-            '--password-store=basic',
-            '--use-mock-keychain'
-        ],
+        args: getChromeArgs(),
         ignoreDefaultArgs: ['--mute-audio', '--enable-automation']
     };
 

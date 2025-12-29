@@ -1,7 +1,7 @@
-# Use ARM64-compatible Node image with Chromium
+# Use AMD64 Node image for NVIDIA GPU support (Docker host is Linux)
 FROM node:20-bookworm
 
-# Install Chromium and dependencies (Debian's Chromium is ARM64 native)
+# Install Chromium and dependencies with GPU support
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -26,7 +26,18 @@ RUN apt-get update && apt-get install -y \
     pulseaudio \
     ffmpeg \
     procps \
+    # GPU acceleration libraries
+    libgl1 \
+    libegl1 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    libnvidia-egl-wayland1 \
     && rm -rf /var/lib/apt/lists/*
+
+# NVIDIA Vulkan ICD - points to library injected by nvidia-container-runtime
+RUN mkdir -p /usr/share/vulkan/icd.d && \
+    echo '{"file_format_version":"1.0.1","ICD":{"library_path":"libGLX_nvidia.so.0","api_version":"1.3.0"}}' \
+    > /usr/share/vulkan/icd.d/nvidia_icd.json
 
 # Set environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
