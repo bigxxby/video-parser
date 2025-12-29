@@ -3,3 +3,8 @@ browser_data/
 recordings/
 *.webm
 temp_*.webm
+
+# Generated API data
+replay_data.json
+full_replay_info.json
+batch_replay_analysis.json
