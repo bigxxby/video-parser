@@ -18,11 +18,11 @@ const fs = require('fs');
 // Viewport настройки (как в replay_cleaner_synced.js)
 const VIEWPORT_WIDTH = 390;
 const VIEWPORT_HEIGHT = 844;
-const DEVICE_SCALE_FACTOR = 3;
+const DEVICE_SCALE_FACTOR = 2; // Reduced from 3 to 2 for better performance in Docker
 const USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
 const MAX_RECORD_DURATION = 300_000; // 5 минут максимум (deprecated - used by waitForDemoEnd)
-const FIXED_RECORD_DURATION = 60_000; // 1 минута фиксированная запись
+const FIXED_RECORD_DURATION = 80_000; // 1 минута 20 секунд (80 секунд)
 
 async function getCanvasBox(page) {
     return await page.evaluate(() => {
@@ -38,8 +38,7 @@ async function realisticClick(page, x, y, description) {
         console.log(`${description}: X=${x.toFixed(0)}, Y=${y.toFixed(0)}`);
     }
 
-    // Визуализация кликов
-    await showClickHitbox(page, x, y, description || 'Click');
+    // Визуализация кликов удалена
 
     await page.mouse.move(x, y, { steps: 5 }); // Быстрое перемещение
     await page.mouse.down();
@@ -55,94 +54,7 @@ function delay(ms) {
 /**
  * Показывает визуальный хитбокс в точке клика
  */
-async function showClickHitbox(page, x, y, label = 'Click') {
-    await page.evaluate(({ x, y, label }) => {
-        // Создаём контейнер для хитбокса
-        const hitbox = document.createElement('div');
-        hitbox.id = 'click-hitbox-' + Date.now();
-        hitbox.style.cssText = `
-            position: fixed;
-            left: ${x - 25}px;
-            top: ${y - 25}px;
-            width: 50px;
-            height: 50px;
-            border: 3px solid red;
-            border-radius: 50%;
-            background: rgba(255, 0, 0, 0.3);
-            pointer-events: none;
-            z-index: 999999;
-            animation: pulse 0.5s ease-out;
-            box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
-        `;
-
-        // Добавляем точку в центре
-        const dot = document.createElement('div');
-        dot.style.cssText = `
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            width: 10px;
-            height: 10px;
-            background: red;
-            border-radius: 50%;
-        `;
-        hitbox.appendChild(dot);
-
-        // Добавляем лейбл
-        const labelEl = document.createElement('div');
-        labelEl.textContent = label;
-        labelEl.style.cssText = `
-            position: absolute;
-            top: -25px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: red;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-            white-space: nowrap;
-        `;
-        hitbox.appendChild(labelEl);
-
-        // Добавляем координаты
-        const coordsEl = document.createElement('div');
-        coordsEl.textContent = `(${Math.round(x)}, ${Math.round(y)})`;
-        coordsEl.style.cssText = `
-            position: absolute;
-            bottom: -20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.8);
-            color: white;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
-            font-family: monospace;
-        `;
-        hitbox.appendChild(coordsEl);
-
-        // Добавляем стиль анимации если его нет
-        if (!document.getElementById('hitbox-animation-style')) {
-            const style = document.createElement('style');
-            style.id = 'hitbox-animation-style';
-            style.textContent = `
-                @keyframes pulse {
-                    0% { transform: scale(0.5); opacity: 1; }
-                    100% { transform: scale(1.5); opacity: 0.3; }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-
-        document.body.appendChild(hitbox);
-
-        // Удаляем через 2 секунды
-        setTimeout(() => hitbox.remove(), 2000);
-    }, { x, y, label });
-}
+// function showClickHitbox removed
 
 async function getSoundState(page) {
     return await page.evaluate(() => ({
@@ -226,14 +138,7 @@ async function enableSound(page) {
     console.log('Кликаем пока звук не включится...');
 
     // Debug: сохраняем скриншот перед кликами (только в Docker режиме)
-    if (isDockerMode) {
-        try {
-            await page.screenshot({ path: './recordings/debug_before_clicks.png', fullPage: true });
-            console.log('📸 Debug screenshot saved: ./recordings/debug_before_clicks.png');
-        } catch (e) {
-            console.log('Failed to save debug screenshot:', e.message);
-        }
-    }
+    // Debug: сохраняем скриншот перед кликами (удалено)
 
     let clickCount = 0;
 
@@ -248,12 +153,7 @@ async function enableSound(page) {
                 console.log(`\n✅ ЗВУК ВКЛЮЧЕН после ${clickCount} кликов!`);
 
                 // Сохраняем финальный скриншот при успехе
-                if (isDockerMode) {
-                    try {
-                        await page.screenshot({ path: './recordings/debug_sound_enabled.png', fullPage: true });
-                        console.log('📸 Debug screenshot saved: ./recordings/debug_sound_enabled.png');
-                    } catch (e) { }
-                }
+                // Сохраняем финальный скриншот при успехе (удалено)
 
                 return true;
             }
@@ -275,12 +175,7 @@ async function enableSound(page) {
         await delay(CLICK_DELAY);
 
         // Debug: сохраняем скриншот каждые 30 кликов
-        if (isDockerMode && clickCount % 30 === 0) {
-            try {
-                await page.screenshot({ path: `./recordings/debug_click_${clickCount}.png`, fullPage: true });
-                console.log(`📸 Debug screenshot saved: ./recordings/debug_click_${clickCount}.png`);
-            } catch (e) { }
-        }
+        // Debug: сохраняем скриншот каждые 30 кликов (удалено)
     }
 }
 
@@ -381,24 +276,146 @@ async function waitForDemoEnd(page, timeoutMs = 300000) {
     return { success: false, elapsed: timeoutMs / 1000 };
 }
 
-async function parseReplay(url) {
-    // В Docker используем headless: "new" режим
-    // Устанавливаем DOCKER_MODE=true или HEADLESS=true для активации
-    const isDockerMode = process.env.DOCKER_MODE === 'true' || process.env.HEADLESS === 'true';
-    const headlessMode = isDockerMode ? 'new' : false;
+/**
+ * Основная функция для обработки одного реплея
+ * @param {string} url - URL реплея
+ * @param {object} browser - инстанс puppeteer browser
+ */
+async function processReplay(url, browser) {
+    let stream = null;
+    let recordFile = null;
+    const timestamp = Date.now();
+    const recordingsDir = './recordings';
+    const tempWebm = `${recordingsDir}/temp_recording_${timestamp}.webm`;
 
-    // В Docker используем Chromium из PUPPETEER_EXECUTABLE_PATH
+    let page = null;
+
+    try {
+        page = await browser.newPage();
+        await page.setUserAgent(USER_AGENT);
+
+        console.log(`[2/6] Переходим на ${url}...`);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+        await delay(5000);
+
+        try {
+            await page.evaluate(() => {
+                window.oSoundFXOn = true;
+                window.UHT_ForceClickForSounds = false;
+                if (window.SoundLoader && typeof window.SoundLoader.InitSounds === 'function') {
+                    window.SoundLoader.InitSounds();
+                }
+                if (window.SoundHelper && typeof window.SoundHelper.OnTouchStart === 'function') {
+                    window.SoundHelper.OnTouchStart();
+                }
+            });
+        } catch (e) { }
+
+        console.log('[3/6] Включаем звук СРАЗУ после загрузки...');
+        await enableSound(page);
+
+        if (!fs.existsSync(recordingsDir)) {
+            fs.mkdirSync(recordingsDir, { recursive: true });
+        }
+
+        console.log('[4/6] Начинаем запись...');
+        stream = await getStream(page, {
+            audio: true,
+            video: true,
+            frameSize: 33, // 30 FPS
+            videoBitsPerSecond: 3000000,
+            mimeType: 'video/webm;codecs=vp8'
+        });
+        recordFile = fs.createWriteStream(tempWebm);
+        stream.pipe(recordFile);
+        console.log('    🎬 Recording started (with audio)');
+
+        const slotName = await getSlotName(page);
+        console.log('\n========================================');
+        console.log(`🎰 СЛОТ: ${slotName}`);
+        console.log('========================================\n');
+
+        async function stopAndSave() {
+            console.log('\n🛑 Завершение записи...');
+            const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+
+            try {
+                stream.destroy();
+                if (recordFile) recordFile.end();
+            } catch (e) {
+                console.log('Error closing stream:', e.message);
+            }
+
+            await delay(1000);
+
+            const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.webm`;
+            const finalMp4File = `${recordingsDir}/${safeSlotName}_${timestamp}.mp4`;
+
+            if (fs.existsSync(tempWebm) && fs.statSync(tempWebm).size > 0) {
+                fs.renameSync(tempWebm, finalOutputFile);
+                console.log(`\n✅ Видео сохранено: ${finalOutputFile}`);
+
+                console.log('🔄 Конвертация в MP4 (forced 30fps)...');
+                try {
+                    execSync(`ffmpeg -y -i "${finalOutputFile}" -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -r 30 "${finalMp4File}"`, { stdio: 'inherit' });
+                    console.log(`✅ MP4 создан: ${finalMp4File}`);
+                } catch (e) {
+                    console.error('❌ Ошибка конвертации в MP4:', e.message);
+                }
+            } else {
+                console.log('❌ Файл записи пуст или не существует');
+            }
+        }
+
+        console.log(`[6/6] Ожидание фиксированной записи (${FIXED_RECORD_DURATION / 1000} сек)...`);
+
+        const startTime = Date.now();
+        const checkInterval = 1000;
+
+        while (Date.now() - startTime < FIXED_RECORD_DURATION) {
+            await delay(checkInterval);
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            const remaining = Math.ceil((FIXED_RECORD_DURATION - (Date.now() - startTime)) / 1000);
+
+            if (elapsed % 5 === 0) {
+                console.log(`  [${elapsed}s / ${FIXED_RECORD_DURATION / 1000}s] Осталось: ${remaining}s`);
+            }
+        }
+
+        await stopAndSave();
+        return true;
+
+    } catch (error) {
+        console.error('Ошибка при обработке реплея:', error.message || error);
+        if (fs.existsSync(tempWebm)) {
+            try { fs.unlinkSync(tempWebm); } catch (e) { }
+        }
+        return false;
+    } finally {
+        if (page) {
+            await page.close().catch(() => { });
+        }
+    }
+}
+
+/**
+ * Главная точка входа
+ */
+async function main() {
+    // В Docker используем headless: "new" режим
+    const isDockerMode = process.env.DOCKER_MODE === 'true' || process.env.HEADLESS === 'true';
+    const isBatchMode = process.env.BATCH_MODE === 'true';
+    const headlessMode = isDockerMode ? 'new' : false;
     const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
 
-    console.log(`[1/6] Запускаем браузер (headless: ${headlessMode})...\n`);
+    console.log(`[1/6] Запускаем браузер (headless: ${headlessMode})...`);
     if (isDockerMode) {
         console.log('🐳 Docker режим: headless: "new" с GPU ускорением');
-        console.log(`   Executable: ${executablePath || 'default Chrome'}`);
     }
 
     const launchOptions = {
         headless: headlessMode,
-        protocolTimeout: 120000, // 2 minutes timeout for Docker performance
+        protocolTimeout: 120000,
         defaultViewport: {
             width: VIEWPORT_WIDTH,
             height: VIEWPORT_HEIGHT,
@@ -415,14 +432,12 @@ async function parseReplay(url) {
             '--disable-notifications',
             '--disable-popup-blocking',
             '--disable-translate',
-            // GPU и WebGL для Docker (canvas рендеринг)
             '--enable-webgl',
             '--enable-gpu',
             '--use-gl=egl',
             '--enable-features=Vulkan,UseSkiaRenderer',
             '--ignore-gpu-blocklist',
             '--disable-software-rasterizer',
-            // Для стабильности в Docker
             '--disable-dev-shm-usage',
             '--disable-background-networking',
             '--disable-background-timer-throttling',
@@ -443,163 +458,72 @@ async function parseReplay(url) {
         ignoreDefaultArgs: ['--mute-audio', '--enable-automation']
     };
 
-    // Docker с Xvfb также использует puppeteer-stream с расширением
-    if (executablePath) {
-        launchOptions.executablePath = executablePath;
-    } else {
-        launchOptions.channel = 'chrome';
-    }
-    // puppeteer-stream extension needed for both Docker and Local
+    if (executablePath) launchOptions.executablePath = executablePath;
+    else launchOptions.channel = 'chrome';
+
     launchOptions.args.push('--allowlisted-extension-id=jjndjgheafjngoipoacpjgeicjeomjli');
 
     const browser = await puppeteerLaunch(launchOptions);
 
-    let stream = null;
-    let recordFile = null;
-    const timestamp = Date.now();
-    // Создаём записи сразу в папке recordings (избегаем EXDEV в Docker)
-    const recordingsDir = './recordings';
-    const tempWebm = `${recordingsDir}/temp_recording_${timestamp}.webm`;
-
     try {
-        const page = await browser.newPage();
-        await page.setUserAgent(USER_AGENT);
+        if (isBatchMode) {
+            console.log('\n🚀 ЗАПУЩЕН BATCH MODE (обработка списка wins.json)\n');
+            const JSON_FILE = 'pragmatic_play_wins.json';
 
-        console.log(`[2/6] Переходим на ${url}...\\n`);
-        // Use domcontentloaded - game pages with heavy JS may take too long for networkidle2
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
-        // Give the page time to initialize JavaScript
-        await delay(5000);
+            if (!fs.existsSync(JSON_FILE)) {
+                console.error(`❌ Файл ${JSON_FILE} не найден!`);
+                process.exit(1);
+            }
 
-        // ========== СРАЗУ ИНИЦИАЛИЗИРУЕМ И КЛИКАЕМ ПО ЗВУКУ ==========
-        // Инициализируем звуки программно
-        try {
-            await page.evaluate(() => {
-                window.oSoundFXOn = true;
-                window.UHT_ForceClickForSounds = false;
-                if (window.SoundLoader && typeof window.SoundLoader.InitSounds === 'function') {
-                    window.SoundLoader.InitSounds();
+            const data = fs.readFileSync(JSON_FILE, 'utf-8');
+            const wins = JSON.parse(data);
+            const replays = wins.filter(w => w.replayUrl);
+
+            console.log(`Найдено ${replays.length} реплеев для обработки.`);
+
+            const recordingsDir = './recordings';
+            if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir);
+
+            for (let i = 0; i < replays.length; i++) {
+                const item = replays[i];
+                console.log(`\n============== [${i + 1}/${replays.length}] ==============`);
+                console.log(`Обработка: ${item.title}`);
+                console.log(`URL: ${item.replayUrl}`);
+
+                // Проверка на существование (простая проверка)
+                const safeTitle = item.title.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+                // Ищем любой mp4, который начинается с этого имени
+                const exists = fs.readdirSync(recordingsDir).some(f => f.startsWith(safeTitle) && f.endsWith('.mp4'));
+
+                if (exists) {
+                    console.log(`✅ Видео для "${item.title}" уже существует. Пропускаем.`);
+                    continue;
                 }
-                if (window.SoundHelper && typeof window.SoundHelper.OnTouchStart === 'function') {
-                    window.SoundHelper.OnTouchStart();
+
+                await processReplay(item.replayUrl, browser);
+
+                // Небольшая пауза между записями для очистки памяти
+                if (i < replays.length - 1) {
+                    console.log('💤 Пауза 5 секунд...');
+                    await delay(5000);
                 }
-            });
-        } catch (e) {
-            // Страница ещё не готова - игнорируем
-        }
-
-        console.log('[3/6] Включаем звук СРАЗУ после загрузки...');
-        await enableSound(page);
-
-        // Создаём папку для записей если не существует
-        if (!fs.existsSync(recordingsDir)) {
-            fs.mkdirSync(recordingsDir, { recursive: true });
-        }
-
-
-        // ========== ЗАПИСЬ НАЧИНАЕТСЯ ПОСЛЕ ВКЛЮЧЕНИЯ ЗВУКА ==========
-        console.log('[4/6] Начинаем запись...');
-
-        // Используем puppeteer-stream для записи (и Docker, и Local)
-        stream = await getStream(page, {
-            audio: true,
-            video: true,
-            frameSize: 1000,
-            videoBitsPerSecond: 8000000
-        });
-        recordFile = fs.createWriteStream(tempWebm);
-        stream.pipe(recordFile);
-        console.log('    🎬 Recording started (with audio)');
-
-        // Получаем название слота
-        const slotName = await getSlotName(page);
-        console.log('\n========================================');
-        console.log(`🎰 СЛОТ: ${slotName}`);
-        console.log('========================================\n');
-
-        // Функция для безопасного завершения и сохранения
-        async function stopAndSave() {
-            console.log('\n🛑 Завершение записи...');
-
-            const safeSlotName = slotName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
-
-            // Останавливаем stream
-            try {
-                stream.destroy();
-                if (recordFile) recordFile.end();
-            } catch (e) {
-                console.log('Error closing stream:', e.message);
             }
-
-            await delay(1000);
-
-            // Переименовываем webm в финальное имя
-            const finalOutputFile = `${recordingsDir}/${safeSlotName}_${timestamp}.webm`;
-            if (fs.existsSync(tempWebm) && fs.statSync(tempWebm).size > 0) {
-                fs.renameSync(tempWebm, finalOutputFile);
-                console.log(`\n✅ Видео сохранено: ${finalOutputFile}`);
-            } else {
-                console.log('❌ Файл записи пуст или не существует');
-            }
+        } else {
+            // Одиночный режим (аргумент командной строки)
+            const url = process.argv[2] || 'https://www.ppshare.net/oAMzeL77kS';
+            await processReplay(url, browser);
         }
 
-        // Обработка прерывания (Ctrl+C)
-        process.removeAllListeners('SIGINT');
-        process.on('SIGINT', async () => {
-            console.log('\n\n🚨 Обнаружено прерывание! Сохраняем видео перед выходом...');
-            await stopAndSave();
-
-            if (browser) {
-                await browser.close().catch(() => { });
-            }
-            process.exit(0);
-        });
-
-        console.log('[6/6] Ожидание фиксированной записи (1 мин)...');
-        // Используем цикл с проверкой флага для прерывания
-        const durationMs = FIXED_RECORD_DURATION;
-        const startTime = Date.now();
-        const checkInterval = 1000;
-
-        while (Date.now() - startTime < durationMs) {
-            await delay(checkInterval);
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            const remaining = Math.ceil((durationMs - (Date.now() - startTime)) / 1000);
-
-            // Логируем каждые 5 сек
-            if (elapsed % 5 === 0) {
-                console.log(`  [${elapsed}s / ${durationMs / 1000}s] Осталось: ${remaining}s`);
-            }
-        }
-
-        // Нормальное завершение
-        await stopAndSave();
-
-    } catch (error) {
-        console.error('Ошибка:', error.message || error);
-        console.error(error.stack);
-
-        // Удаляем временный файл при ошибке (если не удалось сохранить)
-        if (fs.existsSync(tempWebm)) {
-            // fs.unlinkSync(tempWebm); // Keep webm for debug if needed, or delete? User wants to save if interrupt.
-            // При ошибке лучше не удалять если он есть
-        }
+    } catch (e) {
+        console.error('Fatal execution error:', e);
     } finally {
-        if (browser) {
-            try {
-                const pages = await browser.pages();
-                await Promise.all(pages.map(p => p.close().catch(() => { })));
-                await browser.close().catch(() => { });
-            } catch (e) {
-                console.error('Error closing browser:', e);
-            }
-        }
-        console.log('Готово!');
+        console.log('\n🚪 Закрываем браузер...');
+        await browser.close();
     }
 }
 
-const testUrl = process.argv[2] || 'https://www.ppshare.net/oAMzeL77kS';
-parseReplay(testUrl)
+// Запуск
+main()
     .then(() => process.exit(0))
     .catch(err => {
         console.error(err);

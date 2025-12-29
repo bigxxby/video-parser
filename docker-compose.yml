@@ -7,6 +7,7 @@ services:
     environment:
       - NODE_ENV=production
       - DOCKER_MODE=true
+      - BATCH_MODE=true # Enable batch processing of wins.json by default
       # Chrome path in ARM64 Debian image
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       # Software rendering (Mac не поддерживает GPU passthrough в Docker)
